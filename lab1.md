@@ -1,4 +1,5 @@
-### e5:
+### e5:VMA与LMA
+
 这个练习是关于链接的,引出了两个术语VMA(链接地址,程序希望加载的逻辑地址)LMA(加载地址,被加载到的实际物理地址).链接地址用于给链接器计算用生成一些跳转的的地址,比如objdump查看boot.out如下:
 ![](https://s2.loli.net/2023/01/18/H9rK1oBDsPAuaQf.png)
 由于在启动阶段分页和分段机制都还没有开启，所以链接地址和加载地址是一样的,链接地址可以在链接时通过参数指定，从编译文件中可以看到，boot的链接地址是在boot/MakeFrag里面指定的，如果修改里面的0x7c00为0x7d00,make clean之后重新make,可以继续用objdump查看，也可以直接从obj/boot/boot.asm里面看到_start的地址变成了0x7d00.进入gdb模式前面部分命令仍让可以正常执行，但是直接continue系统是无法加载出来的。
@@ -133,4 +134,238 @@ main:
 
 出现了跟main一样的leave指令,leave指令相当于执行两条指令`movl %ebp %esp;popl %ebp`因为对esp进行了sub操作，直接pop出来的不是之前压入的ebp,所以需要先将esp的值改为ebp的值(因为这恰好是esp减小之前的值)再pop才能得到最开始push进去的ebp
 
-e10:调试test_backtrace过程对C编译的字符串产生疑问
+#### 看上去栈帧是紧挨着的，怎么保证不越界？
+
+一个函数要用到的临时变量在编译时就可以知道，所以一般保存ebp之后的指令就是对esp进行sub操作，而且是一次性把整个函数要用到的大小腾出来，总结一下就是一个函数的栈帧大小是确定的，静态的，所以生成之后不会扩展，所以只要编译时不产生错误就不会越界
+如下面的代码:
+
+```c
+
+int g()
+{
+        int d = 100;
+        return 0;
+}
+
+int f()
+{
+        int a = 10;
+        int b = g();
+        int c = 20;
+        return 1;
+}
+
+int main()
+{
+        f();
+}
+```
+
+产生的汇编如下:
+
+```asm
+.globl g
+        .type   g, @function
+g:
+        pushl   %ebp
+        movl    %esp, %ebp
+        subl    $16, %esp
+        movl    $100, -4(%ebp)
+        movl    $0, %eax
+        leave
+        ret
+        .size   g, .-g
+.globl f
+        .type   f, @function
+f:
+        pushl   %ebp
+        movl    %esp, %ebp
+        subl    $16, %esp
+        movl    $10, -4(%ebp)
+        call    g
+        movl    %eax, -8(%ebp)
+        movl    $20, -12(%ebp)
+        movl    $1, %eax
+        leave
+        ret
+        .size   f, .-f
+.globl main
+        .type   main, @function
+main:
+        pushl   %ebp
+        movl    %esp, %ebp
+        call    f
+        movl    $0, %eax
+        popl    %ebp
+        ret
+
+```
+
+观察f函数,如果说每用到一个变量再去操作esp的值那f与g的栈帧关系应该下面这样:
+![](https://s2.loli.net/2023/01/19/THol279ftMZybKm.png)
+
+<table border="1" >
+ <tr >
+  <td bgcolor="blue">ebp(f)</td>
+ </tr>
+ <tr >
+  <td bgcolor="blue">a=10(f)</td>
+ </tr>
+ <tr>
+ <td bgcolor="blue">call压入的返回地址(f) </td>
+ </tr>
+ <tr>
+ <td bgcolor="green">ebp(g) </td>
+ </tr>
+ <tr>
+ <td bgcolor="green">d=100(g) </td>
+ </tr>
+ <tr>
+ <td bgcolor="green">(g) </td>
+ </tr>
+ <tr>
+ <td bgcolor="green">(g) </td>
+ </tr>
+ <tr>
+ <td bgcolor="green">(g) </td>
+ </tr>
+ <tr>
+ <td bgcolor="green">esp(g) </td>
+ </tr>
+ <tr>
+ <td bgcolor="blue">b=1(f) </td>
+ </tr>
+ <tr>
+ <td bgcolor="blue">c=20(f) </td>
+ </tr>
+ <tr>
+ <td bgcolor="blue">esp(f) </td>
+ </tr>
+</table>
+
+这样的栈帧是嵌套的，容易产生错误，且访问不方便，实际的esp一次性申请足够空间，结构如下:
+![](https://s2.loli.net/2023/01/19/A54WJqvnm1puflc.png)
+
+<table border="1" >
+ <tr >
+  <td bgcolor="blue">ebp(f)</td>
+ </tr>
+ <tr >
+  <td bgcolor="blue">a=10(f)</td>
+ </tr>
+ <tr>
+ <td bgcolor="blue">b=1(f) </td>
+ </tr>
+ <tr>
+ <td bgcolor="blue">c=20(f) </td>
+ </tr>
+ <tr>
+ <td bgcolor="blue">call压入的返回地址(f) </td>
+ </tr>
+ <tr>
+ <td bgcolor="blue">esp(f) </td>
+ </tr>
+ <tr>
+ <td bgcolor="green">ebp(g) </td>
+ </tr>
+ <tr>
+ <td bgcolor="green">d=100(g) </td>
+ </tr>
+ <tr>
+ <td bgcolor="green">(g) </td>
+ </tr>
+ <tr>
+ <td bgcolor="green">(g) </td>
+ </tr>
+ <tr>
+ <td bgcolor="green">(g)) </td>
+ </tr>
+ <tr>
+ <td bgcolor="green">esp(g) </td>
+ </tr>
+</table>
+这样栈帧就是一片连续的空间，紧凑简单优雅。另外一个可能相关的问题就是C早期的语法变量声明都要在开头，或许是为了方便计算整个函数要用到的空间,进而操作esp
+
+另外还有一个问题，可以观察到f与g的返回值是放在eax里的，如果返回的是一个结构体会是怎样可以参考我另一篇博客:
+<https://rouze.github.io/2022/09/25/C%E8%AF%AD%E8%A8%80%E9%87%8C%E5%87%BD%E6%95%B0%E8%BF%94%E5%9B%9E%E7%BB%93%E6%9E%84%E4%BD%93%E7%9A%84%E6%B1%87%E7%BC%96%E5%88%86%E6%9E%90/>
+
+### e10: C语言里的字符串常量是存储在哪里的？
+
+```c
+
+int d = 101;
+static int e = 102;
+int main()
+
+{
+        const char *s = "Hello World";
+        const int b = 100;
+        static int c = 99;
+        return 0;
+}
+
+```
+
+汇编文件如下：
+
+```s
+.globl d
+        .data
+        .align 4
+        .type   d, @object
+        .size   d, 4
+d:
+        .long   101
+        .align 4
+        .type   e, @object
+        .size   e, 4
+e:
+        .long   102
+        .section        .rodata
+.LC0:
+        .string "Hello World"
+        .text
+.globl main
+        .type   main, @function
+main:
+        pushl   %ebp
+        movl    %esp, %ebp
+        subl    $16, %esp
+        movl    $.LC0, -4(%ebp)
+        movl    $100, -8(%ebp)
+        movl    $0, %eax
+        leave
+        ret
+        .size   main, .-main
+        .data
+        .align 4
+        .type   c.1124, @object
+        .size   c.1124, 4
+c.1124:
+        .long   99
+        .ident  "GCC: (Ubuntu/Linaro 4.4.7-8ubuntu1) 4.4.7"
+        .section        .note.GNU-stack,"",@progbits
+```
+
+用objdump -h main.o的结果如下:
+
+```text
+
+Sections:
+Idx Name          Size      VMA       LMA       File off  Algn
+  0 .text         0000001b  00000000  00000000  00000034  2**0
+                  CONTENTS, ALLOC, LOAD, RELOC, READONLY, CODE
+  1 .data         0000000c  00000000  00000000  00000050  2**2
+                  CONTENTS, ALLOC, LOAD, DATA
+  2 .bss          00000000  00000000  00000000  0000005c  2**0
+                  ALLOC
+  3 .rodata       0000000c  00000000  00000000  0000005c  2**0
+                  CONTENTS, ALLOC, LOAD, READONLY, DATA
+  4 .comment      0000002b  00000000  00000000  00000068  2**0
+                  CONTENTS, READONLY
+  5 .note.GNU-stack 00000000  00000000  00000000  00000093  2**0
+                  CONTENTS, READONLY
+
+```
+
+可以看到几种变量的的位置是不一样的，但都在这个程序当中，一个程序有很多的段,可以看到全局变量d与e以及函数里的静态变量都放在了.data段,由于e被static限制仅在本文件可见，所以没有被声明为global.三个变量正好大小为0xc个字节,而字符串常量是放在.rodata段的,0xc个字节包含了末尾的0结束符
