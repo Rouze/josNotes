@@ -4,3 +4,6 @@
 大量参考以下作者的文章,非常感谢:
 <https://www.dingmos.com/index.php/category/MIT6-828/>
 <https://www.cnblogs.com/fatsheep9146/category/769143.html>
+
+每个lab都有一个对应的md文件记录，而HW则单独在我的博客里面:
+
