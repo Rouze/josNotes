@@ -2,7 +2,7 @@
 
 这个lab主要是熟悉环境和工具，以及启动过程，这个内核的启动过程大概如下:
 
-make会产生一个kernel.img,这就是内核要用到的硬盘，第一个扇区已经被刻好了boot程序，这个boot由boot文件下的boot.S与main.c组成，boot.S里主要完成的工作就是打开保护模式，打开了了32位模式，最后跳转到main.c里的bootmain函数。bootmain函数的作用就是从第二个扇区(kernel所在位置)开始读取一个页(4kb)的内容放到物理内存0x10000处,通过解析ELF格式将kernel对应的段加载到对应的位置,之后通过elf的entry进入kernel
+make完成会产生一个kernel.img,这就是内核要用到的虚拟硬盘文件，第一个扇区已经被刻好了boot程序，这个boot由boot文件下的boot.S与main.c组成，boot.S里主要完成的工作就是打开保护模式，打开了了32位模式，最后跳转到main.c里的bootmain函数。bootmain函数的作用就是从第二个扇区(kernel所在位置)开始读取一个页(4kb)的内容放到物理内存0x10000处,通过解析ELF格式将kernel对应的段加载到对应的位置,之后通过elf的entry进入kernel
 
 下面是做exercise时遇到的一些问题:
 
